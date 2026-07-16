@@ -140,9 +140,9 @@ def generate_otp() -> str:
 def send_otp_email(email: str, otp: str, username: str):
     """Send OTP via Brevo if keys are set, otherwise log it (for testing)."""
     if not BREVO_API_KEY or not SENDER_EMAIL:
-        # Free plan / testing mode - log OTP
-        print(f"⚠️  [TEST MODE] OTP for {email} ({username}): {otp}")
-        print("   (Set BREVO_API_KEY and SENDER_EMAIL in Render env to send real emails)")
+        # Free plan / testing mode - log OTP so user can see it in Render logs
+        print(f"⚠️  [TEST MODE - NO BREVO] OTP for {email} ({username}): {otp}")
+        print("   → To send real emails: Add BREVO_API_KEY and SENDER_EMAIL in Render Environment Variables")
         return
 
     try:
@@ -174,6 +174,8 @@ def send_otp_email(email: str, otp: str, username: str):
         response = requests.post("https://api.brevo.com/v3/smtp/email", json=payload, headers=headers, timeout=15)
         if response.status_code not in (200, 201, 202):
             print("Brevo error:", response.text)
+        else:
+            print(f"✅ OTP email sent to {email}")
     except Exception as e:
         print("Email send failed (non-fatal):", str(e))
 
@@ -310,6 +312,8 @@ async def verify(data: dict):
     identifier = data.get("email") or data.get("username")
     otp = str(data.get("otp", "")).strip()
     
+    print(f"[VERIFY] identifier={identifier} otp={otp}")
+    
     if not identifier:
         raise HTTPException(400, "Email or username required")
     
@@ -323,6 +327,8 @@ async def verify(data: dict):
         close_db(conn)
         raise HTTPException(404, "User not found")
     
+    print(f"[VERIFY] user found, stored_otp={user.get('otp')}, is_verified={user.get('is_verified')}")
+    
     if not user.get("otp"):
         close_db(conn)
         raise HTTPException(400, "No OTP found. Please click Resend Code.")
@@ -331,14 +337,17 @@ async def verify(data: dict):
     try:
         if user.get("otp_created_at"):
             otp_time = datetime.fromisoformat(user["otp_created_at"])
-            if (datetime.now() - otp_time).total_seconds() > (OTP_EXPIRY_MINUTES * 60):
+            age = (datetime.now() - otp_time).total_seconds()
+            print(f"[VERIFY] OTP age: {age}s, expiry: {OTP_EXPIRY_MINUTES*60}s")
+            if age > (OTP_EXPIRY_MINUTES * 60):
                 close_db(conn)
                 raise HTTPException(400, "OTP expired. Please request a new code.")
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[VERIFY] expiry check error: {e}")
     
     if str(user["otp"]) != otp:
         close_db(conn)
+        print(f"[VERIFY] MISMATCH: stored='{user['otp']}' vs input='{otp}'")
         raise HTTPException(400, "Invalid verification code")
     
     cursor.execute("""
@@ -347,6 +356,7 @@ async def verify(data: dict):
     """, (user["id"],))
     close_db(conn)
     
+    print(f"[VERIFY] SUCCESS for {identifier}")
     return {"message": "Account verified successfully!"}
 
 # ==================== VAULT ====================
